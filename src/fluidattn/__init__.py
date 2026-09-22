@@ -1,1 +1,1 @@
-"""FluidAttn."""
+"""FluidAttn — attention research."""
