@@ -1,0 +1,141 @@
+name: review-code (PR 자동 리뷰)
+
+# AX Platform 3차원(correctness·security·conventions) 코드 리뷰를 PR에 자동 실행하고
+# 결과를 인라인 코멘트 + 요약으로 게시한 뒤, 심각도에 따라 자동으로 approve/auto-merge를 건다.
+#
+# 심각도 게이트(요청 사양):
+#   - critical 또는 major ≥ 1  → request-changes (approve·merge 모두 차단)
+#   - critical 0, major 0, minor ≥ 1 → approve만 (머지는 수동)
+#   - nit만 또는 깨끗          → approve + auto-merge(--auto --squash)
+# 판정은 LLM이 아니라, 리뷰가 남긴 review-verdict.json을 별도 step의 bash가 결정론적으로 읽어 분기한다.
+# verdict 파일이 없거나 파싱 실패하면 fail-safe로 아무 액션도 하지 않는다(승인·머지 보류).
+#
+# 설계 메모: claude-code-action은 슬래시 커맨드를 자기 번들 디렉토리에서만 로드하므로
+# 프로젝트의 .claude/commands/review-code.md(인터랙티브 /review-code, 멀티에이전트 Workflow)는
+# Action에서 실리지 않는다. 그래서 Action용으로는 리뷰 절차를 prompt에 자기완결적으로 풀어
+# 단일 패스로 돌린다(멀티에이전트 verify는 인터랙티브 /review-code 전용).
+#
+# 사전 준비:
+#   1) Claude GitHub App 설치(https://github.com/apps/claude) + repo Secret CLAUDE_CODE_OAUTH_TOKEN 등록
+#      (`claude setup-token` 으로 생성 — Claude 구독으로 과금, ANTHROPIC_API_KEY 불필요. 토큰은 생성한 사람의 구독에 묶임).
+#      주의: 이 워크플로우 파일을 바꾼 PR 에서는 action 이 검증 실패로 skip 된다(main 과 동일해야 실행) — 머지 후 다음 PR 부터 동작.
+#   2) approve가 동작하려면: Settings > Actions > General >
+#      "Allow GitHub Actions to create and approve pull requests" 체크.
+#   3) auto-merge가 동작하려면: Settings > General > "Allow auto-merge" 체크.
+#      (auto-merge는 필수 상태체크/branch protection 통과 후 GitHub가 자동으로 머지한다.
+#       의미 있으려면 base 브랜치에 required status checks를 설정하는 것을 권장.)
+# 비용: synchronize(매 push)마다 도므로 누적. 줄이려면 types 축소·paths 필터·--model 하향.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    # paths: ["src/**"]
+
+permissions:
+  contents: write # auto-merge(merge 수행)용. approve/코멘트만 필요하면 read로 낮춰도 됨.
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: review-code-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # base 브랜치 대비 diff를 위해 전체 히스토리
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # Claude 구독(Pro/Max) 토큰 — API 과금 없음. `claude setup-token` 으로 생성
+          show_full_output: true # 모델 동작을 로그에 노출(진단용)
+          # oncall-ci-fix가 연 수정 PR은 봇(claude app)이 author다. 기본값은 봇 PR
+          # 리뷰를 거부하므로 허용한다. 단 oncall PR의 auto-merge는 아래 게이트에서 차단(사람 게이트 유지).
+          allowed_bots: claude
+          prompt: |
+            PR #${{ github.event.pull_request.number }} (base: ${{ github.event.pull_request.base.ref }})를 코드 리뷰하라. PR 브랜치는 이미 체크아웃돼 있다.
+            변경분은 `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` 로 얻는다.
+
+            아래 3개 차원으로만 검토하라(AX Platform CLAUDE.md CRITICAL 규칙). 추측·범위 밖 지적 금지, 확실한 위반/버그만 보고하라.
+            1) correctness: 일반 로직 버그·엣지케이스, 경로 정규화 후 prefix 검사(traversal 차단), 멱등성(webhook event_id·pg-boss singletonKey), 상태 전이(run 8단계·D0~D9), wiki 정본은 git 마크다운(DB 에만 있는 wiki 내용 금지), 테스트가 실제 동작을 검증하는가(TDD: lib/·services/ 테스트 선행).
+            2) security: 시크릿 필터(정규식+엔트로피)는 서버측에서 모든 wiki_write·트레일 요약에 적용(클라이언트 불신), 토큰은 해시 저장·평문 1회, 권한은 서버 DB 상태로만(요청 body/header 의 role 불신), shared/ 직접 쓰기 금지(승격 게이트만), users/<본인>/ 만 개인 쓰기, 무인 에이전트 쓰기는 PR·prod 자원 read-only, 웹훅 raw body 서명검증, NEXT_PUBLIC_ 에 비밀 금지, 회사 API 키는 서버 env 만.
+            3) conventions/architecture: 레이어 의존 단방향 — lib/ 는 types/ 만 import(services/·@anthropic-ai/*·@modelcontextprotocol/*·discord.js·simple-git 금지), 외부 SDK 는 adapters/ 에서만 호출 시점 지연 생성(키 없이 build/test 통과), wiki repo git 쓰기는 worker git.write 잡만(web/mcp 금지), 모든 MCP 도구는 intent 인자, 무인 프롬프트는 wiki skills/<name>/SKILL.md 로드(하드코딩 금지), 컴포넌트는 dumb(계산·파싱은 lib/), 디렉토리 src/{app,components,server,services,lib,db,adapters,types}, 색은 docs/DESIGN.md·ax-design 토큰만(hex 인라인 금지)·UI_GUIDE 안티패턴 금지.
+
+            게시 방법:
+            - 각 발견을 해당 코드 라인에 `mcp__github_inline_comment__create_inline_comment`(confirmed: true)로 인라인 게시하라. 본문 4줄 형식:
+              `[심각도: critical|major|minor|nit] 제목` / `TL;DR: 무엇이/왜` / `✓ Good: 잘 지킨 점(있으면)` / `→ Fix: 수정 방안`
+            - 마지막에 전체 요약 1개를 `gh pr comment ${{ github.event.pull_request.number }} --body "..."` 로 게시하라:
+              판정(critical≥1 → Blocked / major≥1 → Changes Requested / 그 외 → Approve), 심각도 집계(🔴critical 🟠major 🟡minor ⚪nit), 변경 개요 2~3줄, critical/major 목록, 다음 액션.
+            - 위반이 없으면 인라인은 생략하고 요약만 Approve로 게시하라.
+            - 결과는 GitHub 코멘트로만 남기고, 리뷰 본문을 응답 메시지로 출력하지 마라.
+            - approve/merge는 절대 직접 하지 마라 — 별도 step이 아래 verdict 파일로 자동 판정한다.
+            - 마지막으로 리포지토리 루트에 `review-verdict.json` 파일을 Write 하라. confirmed(검증 통과)한 발견만 심각도별로 센 정수만 담고, 다른 키·주석·코드펜스 없이 순수 JSON만 쓴다:
+              `{"critical": <n>, "major": <n>, "minor": <n>, "nit": <n>}`
+          claude_args: |
+            --allowedTools "Read,Write,Bash(git diff:*),Bash(git log:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
+            # 비용 절감: 아래 주석 해제로 모델 하향.
+            # --model claude-sonnet-4-6
+
+      - name: 심각도 게이트 (approve / auto-merge)
+        if: always() # 리뷰 step이 실패해도 verdict가 있으면 게이트는 시도(없으면 보류)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }} # oncall/* 면 auto-merge 차단
+        run: |
+          set -euo pipefail
+
+          if [ ! -f review-verdict.json ]; then
+            echo "::warning::review-verdict.json 없음 — approve/merge 보류(fail-safe)"
+            exit 0
+          fi
+
+          echo "verdict 원문: $(cat review-verdict.json)"
+          critical=$(jq -r '.critical // 0' review-verdict.json)
+          major=$(jq -r '.major // 0' review-verdict.json)
+          minor=$(jq -r '.minor // 0' review-verdict.json)
+
+          # 정수가 아니면(LLM이 형식을 어기면) 보류
+          for v in "$critical" "$major" "$minor"; do
+            case "$v" in
+              ''|*[!0-9]*)
+                echo "::warning::verdict 숫자 파싱 실패(critical=$critical major=$major minor=$minor) — 보류"
+                exit 0
+                ;;
+            esac
+          done
+
+          echo "집계: critical=$critical · major=$major · minor=$minor"
+
+          if [ "$critical" -gt 0 ] || [ "$major" -gt 0 ]; then
+            echo "→ critical/major 존재: request-changes (approve·merge 차단)"
+            gh pr review "$PR" --request-changes \
+              --body "🔴 critical ${critical} · 🟠 major ${major} 발견 — 머지 차단. 위 인라인/요약 코멘트를 해결하라." \
+              || echo "::warning::request-changes 실패(권한 또는 자기 PR review 제약?)"
+          elif [ "$minor" -gt 0 ]; then
+            echo "→ minor만 존재: approve (머지는 수동)"
+            gh pr review "$PR" --approve \
+              --body "🟡 minor만 발견 — auto-approve. 머지는 수동으로 진행하라." \
+              || echo "::warning::approve 실패(Settings > Actions: 'Allow GitHub Actions to create and approve pull requests' 필요)"
+          else
+            echo "→ nit 이하/깨끗: approve"
+            gh pr review "$PR" --approve \
+              --body "⚪ nit 이하 — auto-approve." \
+              || echo "::warning::approve 실패(Settings > Actions: 'Allow GitHub Actions to create and approve pull requests' 필요)"
+            # oncall 수정 PR은 깨끗해도 auto-merge하지 않는다 — oncall 원칙은 '출력은 PR, 사람이 머지'.
+            case "$HEAD_REF" in
+              oncall/*)
+                echo "→ oncall PR: auto-merge 생략(사람 게이트). 리뷰는 통과, 머지는 사람이."
+                gh pr comment "$PR" --body "⚪ 리뷰 clean. 단 oncall 수정 PR은 자동 머지하지 않습니다 — 사람이 확인 후 머지하세요(사람 게이트)." \
+                  || true
+                ;;
+              *)
+                echo "→ auto-merge(--squash)"
+                gh pr merge "$PR" --auto --squash \
+                  || echo "::warning::auto-merge 실패(Settings > General: 'Allow auto-merge' 필요, 또는 required check 미설정)"
+                ;;
+            esac
+          fi

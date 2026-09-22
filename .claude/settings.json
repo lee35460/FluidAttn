@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/block-dangerous.sh\"", "timeout": 10 },
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/todo-guard.sh\"", "timeout": 10 }
+      ]},
+      { "matcher": "Edit|Write", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/references-readonly.sh\"", "timeout": 5 },
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/tdd-guard.sh\"", "timeout": 15 }
+      ]}
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/format.sh\"", "timeout": 30 }
+      ]},
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/audit.sh\"", "timeout": 5 }
+      ]}
+    ],
+    "SessionStart": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/token-guard.sh\"", "timeout": 15 }
+      ]}
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/token-guard.sh\"", "timeout": 5 }
+      ]}
+    ],
+    "Notification": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/notify.sh\"", "timeout": 5 }
+      ]}
+    ],
+    "Stop": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/verify-gate.sh\"", "timeout": 600 },
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/retry-lock.sh\"", "timeout": 300 },
+        { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/devlog-append.sh\"", "timeout": 10 }
+      ]}
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+# phase execution outputs
+phases/**/step*-output*.json
+reports/*
+!reports/.gitkeep
+__pycache__/
+.pytest_cache/
+*.log
+.env
+.env*.local

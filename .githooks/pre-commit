@@ -1,0 +1,4 @@
+#!/bin/bash
+# git core.hooksPath=.githooks (scripts/setup.sh 가 설정). 실제 로직은 scripts/hooks/precommit-review.sh — 훅 스크립트는 한 곳에 모은다.
+# 이 파일 위치 기준으로 찾는다(git rev-parse 가 아니라) — 다른 repo 에서 `-c core.hooksPath=<여기>` 로 빌려 써도 동작(P-40).
+exec bash "$(cd "$(dirname "$0")/.." && pwd)/scripts/hooks/precommit-review.sh" "$@"

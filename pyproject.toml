@@ -1,0 +1,25 @@
+[project]
+name = "fluidattn"
+version = "0.0.1"
+description = "FluidAttn — attention research"
+requires-python = ">=3.11"
+dependencies = ["torch"]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+exclude = ["scripts"]  # Dagyeom/mvp 하네스 복제본 — 원본과 diff 유지
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

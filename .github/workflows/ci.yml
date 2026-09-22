@@ -1,0 +1,29 @@
+name: ci
+
+# lint + test. PR과 main push에서 돈다. secret 불필요 — CPU 만으로 green 이어야 한다(rules/testing.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m pytest -q
