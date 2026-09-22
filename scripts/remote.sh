@@ -10,7 +10,7 @@ DIR=${REMOTE_DIR:-'~/workspacce_jwon_lee/FluidAttn'}
 MODE=$1; shift; ARG=${1:-}
 [ -z "$ARG" ] && { sed -n 2,7p "$0"; exit 2; }
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-git push -q origin "$BRANCH"
+git fetch -q origin "$BRANCH" && git merge -q --ff-only FETCH_HEAD && git push -q origin "$BRANCH"
 case "$MODE" in
   claude) RUN="claude -p --permission-mode bypassPermissions --output-format text $(printf %q "$ARG")" ;;
   codex)  RUN="codex exec --dangerously-bypass-approvals-and-sandbox $(printf %q "$ARG") </dev/null" ;;  # stdin 열려 있으면 codex 가 대기(execute.py 와 동일)
